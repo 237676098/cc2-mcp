@@ -133,6 +133,11 @@ function getOrAddComponent(node, typeName, addIfMissing) {
   if (!comp) {
     if (addIfMissing) {
       comp = node.addComponent(typeName);
+      if (!comp) {
+        var existing = node._components.map(function(c) { return cc.js.getClassName(c); });
+        throw new Error('Cannot add component "' + typeName + '" to node "' + node.name +
+          '". Conflicts with existing components: [' + existing.join(', ') + '].');
+      }
     } else {
       throw new Error('No ' + typeName + ' component. Set addIfMissing=true to auto-add.');
     }
@@ -445,6 +450,15 @@ module.exports = {
     try {
       var node = findNode(params);
       var comp = node.addComponent(params.componentType);
+      if (!comp) {
+        // CC2 addComponent returns null on conflict (e.g. Label + Sprite both derive from RenderComponent)
+        // The real error is only logged to cc.error console, so we provide a clear message back
+        var existing = node._components.map(function(c) { return cc.js.getClassName(c); });
+        event.reply('Cannot add component "' + params.componentType + '" to node "' + node.name +
+          '". It may conflict with existing components: [' + existing.join(', ') + ']. ' +
+          'In CC2, components derived from the same base (e.g. cc.Sprite and cc.Label both extend cc.RenderComponent) cannot coexist on the same node.');
+        return;
+      }
       event.reply(null, serializeComponent(comp));
     } catch (e) {
       event.reply(e.message);
