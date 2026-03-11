@@ -6,6 +6,8 @@ import { registerComponentTools } from './component.js';
 import { registerAssetTools } from './asset.js';
 import { registerProjectTools } from './project.js';
 import { registerEditorTools } from './editor.js';
+import { registerAnimationTools } from './animation.js';
+import { registerPrefabTools } from './prefab.js';
 
 export function registerTools(server: McpServer, bridge: BridgeClient) {
   registerSceneTools(server, bridge);
@@ -14,4 +16,6 @@ export function registerTools(server: McpServer, bridge: BridgeClient) {
   registerAssetTools(server, bridge);
   registerProjectTools(server, bridge);
   registerEditorTools(server, bridge);
+  registerAnimationTools(server, bridge);
+  registerPrefabTools(server, bridge);
 }

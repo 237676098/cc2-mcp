@@ -459,6 +459,184 @@ module.exports = {
       event.reply(e.message);
     }
   },
+
+  // ---- Animation methods ----
+
+  getNodeAnimations: function (event, params) {
+    try {
+      var node = findNode(params);
+      var anim = node.getComponent(cc.Animation);
+      if (!anim) throw new Error('No Animation component on node');
+      var clips = anim._clips || [];
+      var clipInfos = clips.map(function (clip) {
+        if (!clip) return null;
+        return { name: clip.name, duration: clip.duration, wrapMode: clip.wrapMode, speed: clip.speed };
+      }).filter(Boolean);
+      var defaultClip = anim.defaultClip;
+      event.reply(null, {
+        clips: clipInfos,
+        defaultClip: defaultClip ? defaultClip.name : null,
+        playOnLoad: anim.playOnLoad,
+        currentClip: anim.currentClip ? anim.currentClip.name : null,
+      });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setNodeAnimationClip: function (event, params) {
+    try {
+      var node = findNode(params);
+      var anim = node.getComponent(cc.Animation);
+      if (!anim) throw new Error('No Animation component on node');
+      var action = params.action;
+      var clipUuid = params.clipUuid;
+      cc.assetManager.loadAny({ uuid: clipUuid }, function (err, clip) {
+        if (err || !clip) {
+          event.reply('Failed to load animation clip: ' + (err ? (err.message || err) : 'clip is null'));
+          return;
+        }
+        try {
+          if (action === 'add') {
+            anim.addClip(clip);
+          } else if (action === 'remove') {
+            anim.removeClip(clip, true);
+          } else if (action === 'setDefault') {
+            // Ensure clip is added first
+            var existing = anim._clips.indexOf(clip);
+            if (existing < 0) anim.addClip(clip);
+            anim.defaultClip = clip;
+          }
+          var clips = (anim._clips || []).map(function (c) {
+            if (!c) return null;
+            return { name: c.name, duration: c.duration };
+          }).filter(Boolean);
+          event.reply(null, {
+            success: true,
+            clips: clips,
+            defaultClip: anim.defaultClip ? anim.defaultClip.name : null,
+          });
+        } catch (e2) {
+          event.reply(e2.message);
+        }
+      });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  playAnimation: function (event, params) {
+    try {
+      var node = findNode(params);
+      var anim = node.getComponent(cc.Animation);
+      if (!anim) throw new Error('No Animation component on node');
+      var action = params.action;
+      if (action === 'play') {
+        var state = params.clipName ? anim.play(params.clipName) : anim.play();
+        event.reply(null, { success: true, clip: state ? state.name : null });
+      } else if (action === 'stop') {
+        anim.stop();
+        event.reply(null, { success: true });
+      } else if (action === 'pause') {
+        anim.pause();
+        event.reply(null, { success: true });
+      } else if (action === 'resume') {
+        anim.resume();
+        event.reply(null, { success: true });
+      } else {
+        event.reply('Unknown animation action: ' + action);
+      }
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  // ---- Prefab methods ----
+
+  instantiatePrefab: function (event, params) {
+    try {
+      var prefabUuid = params.prefabUuid;
+      if (!prefabUuid) throw new Error('prefabUuid required');
+      cc.assetManager.loadAny({ uuid: prefabUuid }, function (err, prefab) {
+        if (err || !prefab) {
+          event.reply('Failed to load prefab: ' + (err ? (err.message || err) : 'prefab is null'));
+          return;
+        }
+        try {
+          var node = cc.instantiate(prefab);
+          var parent;
+          if (params.parentPath) {
+            parent = cc.find(params.parentPath);
+            if (!parent) throw new Error('Parent not found: ' + params.parentPath);
+          } else {
+            parent = getSceneRoot();
+          }
+          if (params.position) {
+            node.x = params.position.x || 0;
+            node.y = params.position.y || 0;
+          }
+          parent.addChild(node);
+          event.reply(null, serializeNode(node, 0, 1));
+        } catch (e2) {
+          event.reply(e2.message);
+        }
+      });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  serializeNodeToPrefab: function (event, params) {
+    try {
+      var node = findNode(params);
+      var data = Editor.serialize(node);
+      // Editor.serialize returns a JSON string of an array starting with cc.Node
+      // Prefab format requires a cc.Prefab wrapper at index 0
+      var arr = JSON.parse(data);
+      if (!Array.isArray(arr)) throw new Error('Editor.serialize did not return a JSON array');
+      // Increment all __id__ references by 1 (since we insert a new element at index 0)
+      _incrementIds(arr);
+      // Insert cc.Prefab wrapper at the beginning
+      arr.unshift({
+        __type__: 'cc.Prefab',
+        _name: node.name,
+        _objFlags: 0,
+        _native: '',
+        data: { __id__: 1 },
+        optimizationPolicy: 0,
+        asyncLoadAssets: false,
+      });
+      event.reply(null, { json: JSON.stringify(arr, null, 2) });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  getPrefabStatus: function (event, params) {
+    try {
+      var node = findNode(params);
+      var prefabInfo = node._prefab;
+      if (!prefabInfo) {
+        event.reply(null, { isPrefab: false });
+        return;
+      }
+      var result = {
+        isPrefab: true,
+        fileId: prefabInfo.fileId || null,
+        sync: prefabInfo.sync || false,
+      };
+      if (prefabInfo.asset) {
+        result.assetUuid = prefabInfo.asset._uuid || prefabInfo.asset.uuid || null;
+      }
+      if (prefabInfo.root) {
+        result.rootNodeUuid = prefabInfo.root.uuid || null;
+        result.rootNodeName = prefabInfo.root.name || null;
+      }
+      event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
 };
 
 // ---- Walk helper ----

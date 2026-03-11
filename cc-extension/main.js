@@ -107,9 +107,15 @@ function handleAsset(req, ws, method, params) {
       break;
 
     case 'queryPathByUuid':
-      Editor.assetdb.queryPathByUuid(params.uuid, function (err, path) {
+      // Editor.assetdb.queryPathByUuid does NOT exist in CC2 — use queryAssets fallback
+      Editor.assetdb.queryAssets('db://assets/**/*', null, function (err, results) {
         if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
-        sendResponse(ws, req.id, { path: path });
+        var found = null;
+        for (var i = 0; i < (results || []).length; i++) {
+          if (results[i].uuid === params.uuid) { found = results[i]; break; }
+        }
+        if (!found) return sendError(ws, req.id, 'ASSET_ERROR', 'Asset not found for uuid: ' + params.uuid);
+        sendResponse(ws, req.id, { path: found.path || dbUrlToAbsPath(found.url) });
       });
       break;
 
@@ -121,9 +127,15 @@ function handleAsset(req, ws, method, params) {
       break;
 
     case 'queryInfoByUuid':
-      Editor.assetdb.queryInfoByUuid(params.uuid, function (err, info) {
+      // Editor.assetdb.queryInfoByUuid does NOT exist in CC2 — use queryAssets fallback
+      Editor.assetdb.queryAssets('db://assets/**/*', null, function (err, results) {
         if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
-        sendResponse(ws, req.id, info);
+        var found = null;
+        for (var i = 0; i < (results || []).length; i++) {
+          if (results[i].uuid === params.uuid) { found = results[i]; break; }
+        }
+        if (!found) return sendError(ws, req.id, 'ASSET_ERROR', 'Asset not found for uuid: ' + params.uuid);
+        sendResponse(ws, req.id, found);
       });
       break;
 
@@ -147,12 +159,27 @@ function handleAsset(req, ws, method, params) {
       });
       break;
 
-    case 'createAsset':
-      Editor.assetdb.create(params.url, params.content || '', function (err, results) {
-        if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
-        sendResponse(ws, req.id, results);
-      });
+    case 'createAsset': {
+      // Auto-create parent directories (Editor.assetdb.create can't do this)
+      var absPath = dbUrlToAbsPath(params.url);
+      var parentDir = path.dirname(absPath);
+      if (!fs.existsSync(parentDir)) {
+        fs.mkdirSync(parentDir, { recursive: true });
+        // Refresh so assetdb recognizes the new directory
+        Editor.assetdb.refresh('db://assets', function () {
+          Editor.assetdb.create(params.url, params.content || '', function (err, results) {
+            if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
+            sendResponse(ws, req.id, results);
+          });
+        });
+      } else {
+        Editor.assetdb.create(params.url, params.content || '', function (err, results) {
+          if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
+          sendResponse(ws, req.id, results);
+        });
+      }
       break;
+    }
 
     case 'deleteAsset':
       Editor.assetdb.delete([params.url], function (err) {
@@ -191,6 +218,24 @@ function dbUrlToAbsPath(url) {
   var projectPath = Editor.Project.path || Editor.projectPath;
   var relPath = url.replace('db://assets', 'assets');
   return path.join(projectPath, relPath);
+}
+
+/**
+ * Resolve asset UUID to absolute file path.
+ * In CC2, queryPathByUuid / queryInfoByUuid do NOT exist.
+ * queryUrlByUuid exists but callback often never fires.
+ * Only queryAssets is reliable — use it with a glob pattern.
+ */
+function resolveUuidToPath(uuid, globPattern, cb) {
+  Editor.assetdb.queryAssets(globPattern, null, function (err, results) {
+    if (err) return cb(err);
+    var found = null;
+    for (var i = 0; i < (results || []).length; i++) {
+      if (results[i].uuid === uuid) { found = results[i]; break; }
+    }
+    if (!found) return cb('Asset not found for uuid: ' + uuid);
+    cb(null, found.path || dbUrlToAbsPath(found.url), found.url);
+  });
 }
 
 function handleProject(req, ws, method, params) {
@@ -266,7 +311,7 @@ function handleProject(req, ws, method, params) {
       var url = params.url || params.path;
       var uuid = params.uuid;
       if (uuid) {
-        Editor.assetdb.queryPathByUuid(uuid, function (err, absPath) {
+        resolveUuidToPath(uuid, 'db://assets/**/*.{js,ts}', function (err, absPath) {
           if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
           try {
             sendResponse(ws, req.id, { path: absPath, content: fs.readFileSync(absPath, 'utf8') });
@@ -325,6 +370,251 @@ function handleProject(req, ws, method, params) {
             sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to write: ' + e.message);
           }
         });
+      }
+      break;
+    }
+
+    case 'readAnimClip': {
+      var animUrl = params.url;
+      var animUuid = params.uuid;
+
+      function parseAnimClip(absPath) {
+        try {
+          var raw = fs.readFileSync(absPath, 'utf8');
+          var arr = JSON.parse(raw);
+          // .anim is a JSON array; find the cc.AnimationClip entry
+          var clip = null;
+          for (var i = 0; i < arr.length; i++) {
+            if (arr[i].__type__ === 'cc.AnimationClip') { clip = arr[i]; break; }
+          }
+          if (!clip) throw new Error('No cc.AnimationClip found in file');
+          // Flatten curveData into tracks
+          var tracks = [];
+          var curveData = clip.curveData || {};
+          var paths = curveData.paths || {};
+          // Also handle root-level props (path "")
+          if (curveData.props) {
+            paths[''] = paths[''] || {};
+            paths[''].props = Object.assign(paths[''].props || {}, curveData.props);
+          }
+          for (var nodePath in paths) {
+            var pathData = paths[nodePath];
+            if (pathData.props) {
+              for (var propName in pathData.props) {
+                tracks.push({
+                  path: nodePath,
+                  component: null,
+                  property: propName,
+                  keyframes: pathData.props[propName],
+                });
+              }
+            }
+            if (pathData.comps) {
+              for (var compName in pathData.comps) {
+                var compProps = pathData.comps[compName];
+                for (var cprop in compProps) {
+                  tracks.push({
+                    path: nodePath,
+                    component: compName,
+                    property: cprop,
+                    keyframes: compProps[cprop],
+                  });
+                }
+              }
+            }
+          }
+          sendResponse(ws, req.id, {
+            name: clip._name,
+            duration: clip._duration,
+            sample: clip.sample,
+            speed: clip.speed,
+            wrapMode: clip.wrapMode,
+            tracks: tracks,
+            raw: clip,
+          });
+        } catch (e) {
+          sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to parse .anim: ' + e.message);
+        }
+      }
+
+      if (animUuid) {
+        resolveUuidToPath(animUuid, 'db://assets/**/*.anim', function (err, absPath) {
+          if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+          parseAnimClip(absPath);
+        });
+      } else if (animUrl) {
+        var directPath = dbUrlToAbsPath(animUrl);
+        if (directPath && fs.existsSync(directPath)) {
+          parseAnimClip(directPath);
+        } else {
+          Editor.assetdb.queryPathByUrl(animUrl, function (err, absPath) {
+            if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+            parseAnimClip(absPath);
+          });
+        }
+      } else {
+        sendError(ws, req.id, 'PROJECT_ERROR', 'uuid or url required');
+      }
+      break;
+    }
+
+    case 'editAnimClip': {
+      var editUrl = params.url;
+      var editUuid = params.uuid;
+      var changes = params.changes || {};
+
+      function applyAnimChanges(absPath, dbUrl) {
+        try {
+          var raw = fs.readFileSync(absPath, 'utf8');
+          var arr = JSON.parse(raw);
+          var clip = null;
+          for (var i = 0; i < arr.length; i++) {
+            if (arr[i].__type__ === 'cc.AnimationClip') { clip = arr[i]; break; }
+          }
+          if (!clip) throw new Error('No cc.AnimationClip found in file');
+          if (changes.duration !== undefined) clip._duration = changes.duration;
+          if (changes.sample !== undefined) clip.sample = changes.sample;
+          if (changes.speed !== undefined) clip.speed = changes.speed;
+          if (changes.wrapMode !== undefined) clip.wrapMode = changes.wrapMode;
+          if (changes.curveData !== undefined) clip.curveData = changes.curveData;
+          fs.writeFileSync(absPath, JSON.stringify(arr, null, 2), 'utf8');
+          var refreshUrl = dbUrl || editUrl;
+          if (refreshUrl) {
+            Editor.assetdb.refresh(refreshUrl, function () {
+              sendResponse(ws, req.id, { success: true });
+            });
+          } else {
+            sendResponse(ws, req.id, { success: true });
+          }
+        } catch (e) {
+          sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to edit .anim: ' + e.message);
+        }
+      }
+
+      if (editUuid) {
+        resolveUuidToPath(editUuid, 'db://assets/**/*.anim', function (err, absPath, dbUrl) {
+          if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+          applyAnimChanges(absPath, dbUrl);
+        });
+      } else if (editUrl) {
+        var directPath = dbUrlToAbsPath(editUrl);
+        if (directPath && fs.existsSync(directPath)) {
+          applyAnimChanges(directPath, editUrl);
+        } else {
+          Editor.assetdb.queryPathByUrl(editUrl, function (err, absPath) {
+            if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+            applyAnimChanges(absPath, editUrl);
+          });
+        }
+      } else {
+        sendError(ws, req.id, 'PROJECT_ERROR', 'uuid or url required');
+      }
+      break;
+    }
+
+    case 'readPrefab': {
+      var prefabUrl = params.url;
+      var prefabUuid = params.uuid;
+
+      function parsePrefab(absPath) {
+        try {
+          var raw = fs.readFileSync(absPath, 'utf8');
+          var arr = JSON.parse(raw);
+          // Extract node tree structure from the prefab JSON array
+          var nodes = [];
+          var components = [];
+          var prefabInfo = null;
+          for (var i = 0; i < arr.length; i++) {
+            var item = arr[i];
+            if (!item || !item.__type__) continue;
+            if (item.__type__ === 'cc.Prefab') {
+              prefabInfo = { name: item._name, optimizationPolicy: item.optimizationPolicy, asyncLoadAssets: item.asyncLoadAssets };
+            } else if (item.__type__ === 'cc.Node') {
+              nodes.push({
+                index: i,
+                name: item._name,
+                active: item._active !== false,
+                position: item._position,
+                scale: item._scale,
+                anchor: item._anchorPoint,
+                size: item._contentSize,
+                childrenIds: (item._children || []).map(function (c) { return c.__id__; }),
+                componentIds: (item._components || []).map(function (c) { return c.__id__; }),
+              });
+            } else {
+              // Component or other type
+              components.push({
+                index: i,
+                type: item.__type__,
+              });
+            }
+          }
+          sendResponse(ws, req.id, {
+            prefab: prefabInfo,
+            nodes: nodes,
+            components: components,
+            totalEntries: arr.length,
+          });
+        } catch (e) {
+          sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to parse .prefab: ' + e.message);
+        }
+      }
+
+      if (prefabUuid) {
+        resolveUuidToPath(prefabUuid, 'db://assets/**/*.prefab', function (err, absPath) {
+          if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+          parsePrefab(absPath);
+        });
+      } else if (prefabUrl) {
+        var directPath = dbUrlToAbsPath(prefabUrl);
+        if (directPath && fs.existsSync(directPath)) {
+          parsePrefab(directPath);
+        } else {
+          Editor.assetdb.queryPathByUrl(prefabUrl, function (err, absPath) {
+            if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+            parsePrefab(absPath);
+          });
+        }
+      } else {
+        sendError(ws, req.id, 'PROJECT_ERROR', 'uuid or url required');
+      }
+      break;
+    }
+
+    case 'writePrefab': {
+      var wpUrl = params.url;
+      var wpContent = params.content;
+      if (!wpUrl) return sendError(ws, req.id, 'PROJECT_ERROR', 'url required');
+      if (!wpContent) return sendError(ws, req.id, 'PROJECT_ERROR', 'content required');
+      var wpDirectPath = dbUrlToAbsPath(wpUrl);
+      var exists = wpDirectPath && fs.existsSync(wpDirectPath);
+      if (exists) {
+        // Overwrite existing prefab
+        try {
+          fs.writeFileSync(wpDirectPath, wpContent, 'utf8');
+          Editor.assetdb.refresh(wpUrl, function () {
+            sendResponse(ws, req.id, { success: true });
+          });
+        } catch (e) {
+          sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to write prefab: ' + e.message);
+        }
+      } else {
+        // Create new prefab via assetdb (auto-create parent dirs)
+        var wpParentDir = path.dirname(wpDirectPath);
+        if (wpParentDir && !fs.existsSync(wpParentDir)) {
+          fs.mkdirSync(wpParentDir, { recursive: true });
+          Editor.assetdb.refresh('db://assets', function () {
+            Editor.assetdb.create(wpUrl, wpContent, function (err, results) {
+              if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+              sendResponse(ws, req.id, { success: true, results: results });
+            });
+          });
+        } else {
+          Editor.assetdb.create(wpUrl, wpContent, function (err, results) {
+            if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+            sendResponse(ws, req.id, { success: true, results: results });
+          });
+        }
       }
       break;
     }
@@ -389,12 +679,17 @@ function handleEditor(req, ws, method, params) {
       sendResponse(ws, req.id, { success: true, message: 'Build started' });
       break;
 
-    case 'previewProject':
-      Editor.Ipc.sendToMain('preview-server:open', {
-        browser: params.browser || '',
-      });
+    case 'previewProject': {
+      // Use Electron shell to open preview URL directly (preview-server:open IPC is unreliable)
+      var electron = require('electron');
+      var previewUrl = 'http://localhost:7456';
+      if (params.browser) {
+        previewUrl += '?browser=' + params.browser;
+      }
+      electron.shell.openExternal(previewUrl);
       sendResponse(ws, req.id, { success: true, message: 'Preview started' });
       break;
+    }
 
     case 'openScene':
       if (params.url) {
