@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "cc2-mcp": {
+      "command": "node",
+      "args": ["D:/work/zuoyebang/cc2-mcp/dist/index.js"]
+    }
+  }
+}
