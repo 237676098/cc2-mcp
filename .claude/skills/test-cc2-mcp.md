@@ -232,7 +232,7 @@
 - 验证返回包含 uuid、type 等元数据
 
 **A-4** `cc_read_script`
-- 读取 db://assets/Script/HelloWorld.ts 的内容
+- 读取 db://assets/Script/HelloWord.ts 的内容
 - 验证返回脚本源码字符串
 
 **A-5** `cc_create_asset`

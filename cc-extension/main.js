@@ -124,6 +124,26 @@ function handleAsset(req, ws, method, params) {
       });
       break;
 
+    case 'getAssetInfoByUrl':
+      // Use queryAssets to find asset by URL (queryUuidByUrl callback often never fires)
+      Editor.assetdb.queryAssets(params.url, null, function (err, results) {
+        if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
+        if (results && results.length > 0) {
+          var r = results[0];
+          sendResponse(ws, req.id, { url: r.url, path: r.path, uuid: r.uuid, type: r.type });
+        } else {
+          sendError(ws, req.id, 'ASSET_ERROR', 'Asset not found: ' + params.url);
+        }
+      });
+      break;
+
+    case 'queryUrlByUuid':
+      Editor.assetdb.queryUrlByUuid(params.uuid, function (err, url) {
+        if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
+        sendResponse(ws, req.id, { url: url });
+      });
+      break;
+
     case 'createAsset':
       Editor.assetdb.create(params.url, params.content || '', function (err, results) {
         if (err) return sendError(ws, req.id, 'ASSET_ERROR', String(err));
@@ -162,6 +182,14 @@ function handleAsset(req, ws, method, params) {
 var fs = require('fs');
 var path = require('path');
 
+function dbUrlToAbsPath(url) {
+  // Convert db://assets/... to absolute path
+  if (!url || !url.startsWith('db://assets')) return null;
+  var projectPath = Editor.Project.path || Editor.projectPath;
+  var relPath = url.replace('db://assets', 'assets');
+  return path.join(projectPath, relPath);
+}
+
 function handleProject(req, ws, method, params) {
   switch (method) {
     case 'getInfo': {
@@ -188,11 +216,27 @@ function handleProject(req, ws, method, params) {
       break;
 
     case 'listScripts': {
-      var pattern = params.path ? ('db://' + params.path + '/**/*.js') : 'db://assets/**/*.js';
-      Editor.assetdb.queryAssets(pattern, 'javascript', function (err, results) {
+      var projectPathLS = Editor.Project.path || Editor.projectPath;
+      var basePath = params.path ? ('db://' + params.path) : 'db://assets';
+      // Query both JS and TS scripts
+      var jsPattern = basePath + '/**/*.js';
+      var tsPattern = basePath + '/**/*.ts';
+      Editor.assetdb.queryAssets(jsPattern, 'javascript', function (err, jsResults) {
         if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
-        var scripts = results.map(function (r) { return { url: r.url, uuid: r.uuid }; });
-        sendResponse(ws, req.id, scripts);
+        Editor.assetdb.queryAssets(tsPattern, 'typescript', function (err2, tsResults) {
+          if (err2) {
+            // Fallback: typescript type might not be recognized, try without type filter
+            Editor.assetdb.queryAssets(tsPattern, null, function (err3, tsResults2) {
+              var allResults = (jsResults || []).concat(tsResults2 || []);
+              var scripts = allResults.map(function (r) { return { url: r.url, uuid: r.uuid }; });
+              sendResponse(ws, req.id, scripts);
+            });
+            return;
+          }
+          var allResults = (jsResults || []).concat(tsResults || []);
+          var scripts = allResults.map(function (r) { return { url: r.url, uuid: r.uuid }; });
+          sendResponse(ws, req.id, scripts);
+        });
       });
       break;
     }
@@ -228,14 +272,24 @@ function handleProject(req, ws, method, params) {
           }
         });
       } else if (url) {
-        Editor.assetdb.queryPathByUrl(url, function (err, absPath) {
-          if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+        // Try direct file path first (queryPathByUrl may not callback for .ts files)
+        var directPath = dbUrlToAbsPath(url);
+        if (directPath && fs.existsSync(directPath)) {
           try {
-            sendResponse(ws, req.id, { path: absPath, content: fs.readFileSync(absPath, 'utf8') });
+            sendResponse(ws, req.id, { path: directPath, content: fs.readFileSync(directPath, 'utf8') });
           } catch (e) {
             sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to read: ' + e.message);
           }
-        });
+        } else {
+          Editor.assetdb.queryPathByUrl(url, function (err, absPath) {
+            if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+            try {
+              sendResponse(ws, req.id, { path: absPath, content: fs.readFileSync(absPath, 'utf8') });
+            } catch (e) {
+              sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to read: ' + e.message);
+            }
+          });
+        }
       } else {
         sendError(ws, req.id, 'PROJECT_ERROR', 'uuid or url required');
       }
@@ -245,17 +299,30 @@ function handleProject(req, ws, method, params) {
     case 'writeScript': {
       var wUrl = params.url || params.path;
       if (!wUrl) return sendError(ws, req.id, 'PROJECT_ERROR', 'url required');
-      Editor.assetdb.queryPathByUrl(wUrl, function (err, absPath) {
-        if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+      // Try direct file path first
+      var wDirectPath = dbUrlToAbsPath(wUrl);
+      if (wDirectPath && fs.existsSync(wDirectPath)) {
         try {
-          fs.writeFileSync(absPath, params.content, 'utf8');
+          fs.writeFileSync(wDirectPath, params.content, 'utf8');
           Editor.assetdb.refresh(wUrl, function () {
             sendResponse(ws, req.id, { success: true });
           });
         } catch (e) {
           sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to write: ' + e.message);
         }
-      });
+      } else {
+        Editor.assetdb.queryPathByUrl(wUrl, function (err, absPath) {
+          if (err) return sendError(ws, req.id, 'PROJECT_ERROR', String(err));
+          try {
+            fs.writeFileSync(absPath, params.content, 'utf8');
+            Editor.assetdb.refresh(wUrl, function () {
+              sendResponse(ws, req.id, { success: true });
+            });
+          } catch (e) {
+            sendError(ws, req.id, 'PROJECT_ERROR', 'Failed to write: ' + e.message);
+          }
+        });
+      }
       break;
     }
 
@@ -324,6 +391,22 @@ function handleEditor(req, ws, method, params) {
         browser: params.browser || '',
       });
       sendResponse(ws, req.id, { success: true, message: 'Preview started' });
+      break;
+
+    case 'openScene':
+      if (params.url) {
+        Editor.Ipc.sendToMain('scene:open-by-url', params.url);
+        // scene:open-by-url doesn't reliably callback, respond immediately
+        sendResponse(ws, req.id, { success: true });
+      } else {
+        sendError(ws, req.id, 'EDITOR_ERROR', 'url required');
+      }
+      break;
+
+    case 'saveScene':
+      Editor.Ipc.sendToMain('scene:save-scene');
+      // scene:save-scene doesn't reliably callback, respond immediately
+      sendResponse(ws, req.id, { success: true });
       break;
 
     default:

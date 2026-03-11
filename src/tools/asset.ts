@@ -31,9 +31,8 @@ export function registerAssetTools(server: McpServer, bridge: BridgeClient) {
         return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
       }
       if (path) {
-        const r = await bridge.send('asset', 'queryUuidByUrl', { url: path });
-        const info = await bridge.send('asset', 'queryInfoByUuid', { uuid: (r as any).uuid });
-        return { content: [{ type: 'text', text: JSON.stringify(info, null, 2) }] };
+        const data = await bridge.send('asset', 'getAssetInfoByUrl', { url: path });
+        return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] };
       }
       return { content: [{ type: 'text', text: 'Either path or uuid is required' }], isError: true };
     }

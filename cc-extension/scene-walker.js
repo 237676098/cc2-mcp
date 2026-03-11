@@ -76,10 +76,29 @@ function serializeNode(node, depth, maxDepth) {
 function serializeComponent(comp) {
   var className = cc.js.getClassName(comp);
   var result = { type: className, uuid: comp.uuid, enabled: comp.enabled, properties: {} };
-  var keys = Object.keys(comp);
-  for (var i = 0; i < keys.length; i++) {
-    var key = keys[i];
-    if (key.startsWith('_') || key === 'node' || key === 'uuid' || key === 'enabled') continue;
+  // Collect all property names from own keys and prototype chain
+  var allKeys = {};
+  // Own keys
+  var ownKeys = Object.keys(comp);
+  for (var i = 0; i < ownKeys.length; i++) allKeys[ownKeys[i]] = true;
+  // Prototype getter/setter properties (where CC2 defines component props like `string`, `fontSize`, etc.)
+  try {
+    var proto = Object.getPrototypeOf(comp);
+    while (proto && proto !== Object.prototype) {
+      var names = Object.getOwnPropertyNames(proto);
+      for (var n = 0; n < names.length; n++) {
+        var dkey = names[n];
+        try {
+          var desc = Object.getOwnPropertyDescriptor(proto, dkey);
+          if (desc && desc.get) allKeys[dkey] = true;
+        } catch (e2) { /* skip */ }
+      }
+      proto = Object.getPrototypeOf(proto);
+    }
+  } catch (e) { /* fallback: only use own keys */ }
+  var skipSet = { node: 1, uuid: 1, enabled: 1, constructor: 1 };
+  for (var key in allKeys) {
+    if (key.startsWith('_') || skipSet[key]) continue;
     try {
       result.properties[key] = serializer.safeSerialize(comp[key], 3);
     } catch (e) { /* skip */ }
