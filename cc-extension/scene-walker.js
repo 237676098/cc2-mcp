@@ -96,7 +96,13 @@ function serializeComponent(comp) {
       proto = Object.getPrototypeOf(proto);
     }
   } catch (e) { /* fallback: only use own keys */ }
-  var skipSet = { node: 1, uuid: 1, enabled: 1, constructor: 1 };
+  var skipSet = {
+    node: 1, uuid: 1, enabled: 1, constructor: 1,
+    // Sprite deprecated inset properties
+    insetBottom: 1, insetLeft: 1, insetRight: 1, insetTop: 1,
+    // deprecated materials accessor
+    sharedMaterials: 1
+  };
   for (var key in allKeys) {
     if (key.startsWith('_') || skipSet[key]) continue;
     try {
