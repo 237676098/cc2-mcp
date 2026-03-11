@@ -52,7 +52,7 @@ function serializeNode(node, depth, maxDepth) {
     path: getNodePath(node),
     active: node.active,
     position: { x: node.x, y: node.y },
-    rotation: node.rotation,
+    rotation: -node.angle,
     scale: { x: node.scaleX, y: node.scaleY },
     anchor: { x: node.anchorX, y: node.anchorY },
     size: { width: node.width, height: node.height },
