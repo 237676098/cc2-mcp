@@ -147,15 +147,57 @@ function loadAndSetAssetProperty(comp, prop, uuid, event) {
 
 // ---- Exported Scene Script Methods ----
 
+// Recursively increment all __id__ values in a serialized array by 1
+function _incrementIds(arr) {
+  for (var i = 0; i < arr.length; i++) {
+    _incrementIdsInObj(arr[i]);
+  }
+}
+
+function _incrementIdsInObj(obj) {
+  if (!obj || typeof obj !== 'object') return;
+  if (Array.isArray(obj)) {
+    for (var i = 0; i < obj.length; i++) {
+      _incrementIdsInObj(obj[i]);
+    }
+    return;
+  }
+  var keys = Object.keys(obj);
+  for (var k = 0; k < keys.length; k++) {
+    var key = keys[k];
+    var val = obj[key];
+    if (key === '__id__' && typeof val === 'number') {
+      obj.__id__ = val + 1;
+    } else if (val && typeof val === 'object') {
+      _incrementIdsInObj(val);
+    }
+  }
+}
+
 module.exports = {
 
   // Serialize the current scene to JSON string (for direct file write)
+  // Wraps with cc.SceneAsset to match .fire format expected by CC2
   serializeSceneToJson: function (event) {
     try {
       var scene = cc.director.getScene();
       if (!scene) throw new Error('No scene loaded');
       var data = Editor.serialize(scene);
-      event.reply(null, data);
+      // Editor.serialize returns a JSON string of an array starting with cc.Scene
+      // .fire format requires a cc.SceneAsset wrapper at index 0
+      var arr = JSON.parse(data);
+      if (!Array.isArray(arr)) throw new Error('Editor.serialize did not return a JSON array');
+      // Increment all __id__ references by 1 (since we insert a new element at index 0)
+      _incrementIds(arr);
+      // Insert cc.SceneAsset at the beginning, pointing scene to __id__:1 (the original first element)
+      arr.unshift({
+        __type__: 'cc.SceneAsset',
+        _name: '',
+        _objFlags: 0,
+        _native: '',
+        scene: { __id__: 1 }
+      });
+      event.reply(null, JSON.stringify(arr, null, 2));
     } catch (e) {
       event.reply(e.message);
     }
