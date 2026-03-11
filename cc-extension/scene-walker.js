@@ -98,8 +98,10 @@ function serializeComponent(comp) {
   } catch (e) { /* fallback: only use own keys */ }
   var skipSet = {
     node: 1, uuid: 1, enabled: 1, constructor: 1,
-    // Sprite deprecated inset properties
+    // Sprite deprecated inset properties (property + obsolete get/set method wrappers)
     insetBottom: 1, insetLeft: 1, insetRight: 1, insetTop: 1,
+    setInsetBottom: 1, setInsetLeft: 1, setInsetRight: 1, setInsetTop: 1,
+    getInsetBottom: 1, getInsetLeft: 1, getInsetRight: 1, getInsetTop: 1,
     // deprecated materials accessor
     sharedMaterials: 1
   };
