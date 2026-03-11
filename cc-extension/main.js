@@ -6,6 +6,7 @@ var serializer = require('./utils/serializer');
 var PORT = 9531;
 var wss = null;
 var client = null;
+var pendingSceneOpen = null; // { ws, id } — waiting for scene:ready after openScene
 
 // ---- WebSocket Server ----
 
@@ -395,9 +396,26 @@ function handleEditor(req, ws, method, params) {
 
     case 'openScene':
       if (params.url) {
-        Editor.Ipc.sendToMain('scene:open-by-url', params.url);
-        // scene:open-by-url doesn't reliably callback, respond immediately
-        sendResponse(ws, req.id, { success: true });
+        // First check if the same scene is already open via scene script
+        Editor.Scene.callSceneScript('cc2-mcp-bridge', 'getCurrentSceneInfo', null, function (err, info) {
+          if (!err && info && info.uuid) {
+            // Check if requested scene matches the currently loaded scene
+            Editor.assetdb.queryAssets(params.url, null, function (err2, results) {
+              if (!err2 && results && results.length > 0 && results[0].uuid === info.uuid) {
+                // Same scene already open — respond immediately
+                sendResponse(ws, req.id, { success: true, alreadyOpen: true });
+                return;
+              }
+              // Different scene — send open and wait for scene:ready
+              pendingSceneOpen = { ws: ws, id: req.id };
+              Editor.Ipc.sendToMain('scene:open-by-url', params.url);
+            });
+          } else {
+            // Can't determine current scene — just send open and wait
+            pendingSceneOpen = { ws: ws, id: req.id };
+            Editor.Ipc.sendToMain('scene:open-by-url', params.url);
+          }
+        });
       } else {
         sendError(ws, req.id, 'EDITOR_ERROR', 'url required');
       }
@@ -405,7 +423,6 @@ function handleEditor(req, ws, method, params) {
 
     case 'saveScene':
       Editor.Ipc.sendToMain('scene:save-scene');
-      // scene:save-scene doesn't reliably callback, respond immediately
       sendResponse(ws, req.id, { success: true });
       break;
 
@@ -430,6 +447,13 @@ module.exports = {
     'stop-server': function () { stopServer(); },
     'scene:ready': function () {
       Editor.log('[cc2-mcp-bridge] Scene ready');
+      // Resolve pending openScene request
+      if (pendingSceneOpen) {
+        try {
+          sendResponse(pendingSceneOpen.ws, pendingSceneOpen.id, { success: true });
+        } catch (e) { /* ws may be closed */ }
+        pendingSceneOpen = null;
+      }
     },
   },
 };

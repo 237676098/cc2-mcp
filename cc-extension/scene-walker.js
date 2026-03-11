@@ -280,6 +280,8 @@ module.exports = {
       var comp = node.getComponent(params.componentType);
       if (!comp) throw new Error('Component not found: ' + params.componentType);
       comp.destroy();
+      // Force immediate cleanup so getComponents reflects the removal
+      cc.Object._deferredDestroy();
       event.reply(null, { success: true });
     } catch (e) {
       event.reply(e.message);

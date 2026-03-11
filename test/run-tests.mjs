@@ -171,8 +171,6 @@ async function run() {
     if (sceneUrl) {
       const s4 = parseText(await sendAndWait(makeRequest('cc_open_scene', { scenePath: sceneUrl })));
       record('S-4', !s4.error, s4.error ? s4.text : 'Scene opened');
-      // Wait for scene to fully load after opening
-      await new Promise(r => setTimeout(r, 5000));
     } else {
       record('S-4', false, 'SKIP - no scene URL available');
     }
@@ -486,6 +484,15 @@ async function run() {
   // Output JSON for parsing
   console.log('---JSON_RESULTS---');
   console.log(JSON.stringify({ results, summary: { total: ids.length, pass, fail, skip } }));
+
+  // Restore test project scene file (tests may modify it via save)
+  try {
+    const { execSync } = await import('child_process');
+    execSync('git checkout -- assets/Scene/helloworld.fire', { cwd: 'C:/Users/zyb/Desktop/TestMcp', stdio: 'pipe' });
+    console.log('[cleanup] Scene file restored via git');
+  } catch (e) {
+    console.log('[cleanup] Warning: could not restore scene file:', e.message);
+  }
 
   child.kill();
   process.exit(0);
