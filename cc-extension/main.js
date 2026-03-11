@@ -1,6 +1,8 @@
 'use strict';
 
 var WebSocket = require('ws');
+var fs = require('fs');
+var path = require('path');
 var serializer = require('./utils/serializer');
 
 var PORT = 9531;
@@ -422,8 +424,50 @@ function handleEditor(req, ws, method, params) {
       break;
 
     case 'saveScene':
-      Editor.Ipc.sendToMain('scene:save-scene');
-      sendResponse(ws, req.id, { success: true });
+      var _saveWs = ws;
+      var _saveId = req.id;
+      // Get current scene info to find the UUID
+      Editor.Scene.callSceneScript('cc2-mcp-bridge', 'getCurrentSceneInfo', null, function (err0, sceneInfo) {
+        if (err0 || !sceneInfo) {
+          sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Cannot get scene info: ' + (err0 || 'no scene'));
+          return;
+        }
+        // Serialize the scene in the render process using Editor.serialize
+        Editor.Scene.callSceneScript('cc2-mcp-bridge', 'serializeSceneToJson', null, function (err, jsonData) {
+          if (err) {
+            sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Serialize failed: ' + err);
+            return;
+          }
+          if (!jsonData || typeof jsonData !== 'string') {
+            sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Serialized data is empty or not a string, type: ' + typeof jsonData);
+            return;
+          }
+          // Find scene file path via queryAssets
+          Editor.assetdb.queryAssets('db://assets/**/*.fire', 'scene', function (err2, results) {
+            if (err2 || !results) {
+              sendError(_saveWs, _saveId, 'SAVE_ERROR', 'queryAssets failed: ' + err2);
+              return;
+            }
+            var sceneAsset = null;
+            for (var i = 0; i < results.length; i++) {
+              if (results[i].uuid === sceneInfo.uuid) { sceneAsset = results[i]; break; }
+            }
+            if (!sceneAsset || !sceneAsset.path) {
+              sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Scene file not found for uuid: ' + sceneInfo.uuid);
+              return;
+            }
+            try {
+              fs.writeFileSync(sceneAsset.path, jsonData, 'utf8');
+              // Refresh asset database so editor picks up the change
+              Editor.assetdb.refresh(sceneAsset.url, function () {
+                sendResponse(_saveWs, _saveId, { success: true });
+              });
+            } catch (writeErr) {
+              sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Write failed: ' + writeErr.message);
+            }
+          });
+        });
+      });
       break;
 
     default:

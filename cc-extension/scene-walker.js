@@ -106,9 +106,95 @@ function serializeComponent(comp) {
   return result;
 }
 
+// ---- Asset-reference property helpers ----
+
+// Known component properties that reference assets (need async loading, NOT direct assignment)
+var ASSET_PROPS = {
+  spriteFrame: 1, spriteAtlas: 1, font: 1, clip: 1, defaultClip: 1,
+  normalSprite: 1, pressedSprite: 1, hoverSprite: 1, disabledSprite: 1,
+};
+
+// UUID pattern: 8-4-4-4-12 hex or 32 hex without dashes
+var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Extract a UUID string from various value formats.
+ * Returns null if value is not a UUID reference.
+ */
+function extractUuid(val) {
+  if (typeof val === 'string' && UUID_RE.test(val)) return val;
+  if (val && typeof val === 'object') {
+    if (typeof val.uuid === 'string' && UUID_RE.test(val.uuid)) return val.uuid;
+    if (typeof val.__uuid__ === 'string' && UUID_RE.test(val.__uuid__)) return val.__uuid__;
+  }
+  return null;
+}
+
+/**
+ * Load an asset by UUID and assign it to a component property.
+ * Uses {uuid: ...} format for cc.assetManager.loadAny (explicit UUID loading).
+ */
+function loadAndSetAssetProperty(comp, prop, uuid, event) {
+  cc.assetManager.loadAny({ uuid: uuid }, function (err, asset) {
+    if (err || !asset) {
+      event.reply('Failed to load asset for ' + prop + ': ' + (err ? (err.message || err) : 'asset is null'));
+      return;
+    }
+    comp[prop] = asset;
+    event.reply(null, serializeComponent(comp));
+  });
+}
+
 // ---- Exported Scene Script Methods ----
 
 module.exports = {
+
+  // Serialize the current scene to JSON string (for direct file write)
+  serializeSceneToJson: function (event) {
+    try {
+      var scene = cc.director.getScene();
+      if (!scene) throw new Error('No scene loaded');
+      var data = Editor.serialize(scene);
+      event.reply(null, data);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  // Stash the scene (serialize to internal buffer for save)
+  stashScene: function (event) {
+    try {
+      _Scene.stashScene();
+      event.reply(null, { success: true });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  // Diagnostics: check available serialization APIs
+  diagnoseSaveApis: function (event) {
+    try {
+      var apis = {};
+      apis.hasEditor = typeof Editor !== 'undefined';
+      apis.has_Scene = typeof _Scene !== 'undefined';
+      apis.has_cc_serialize = typeof cc.serialize === 'function';
+      apis.has_cc_engine = typeof cc.engine !== 'undefined';
+      apis.has_cc_loader = typeof cc.loader !== 'undefined';
+      if (typeof _Scene !== 'undefined') {
+        apis._Scene_keys = Object.keys(_Scene).slice(0, 30);
+      }
+      if (typeof Editor !== 'undefined') {
+        apis.Editor_keys = Object.keys(Editor).slice(0, 30);
+        apis.hasEditorSerialize = typeof Editor.serialize === 'function';
+      }
+      if (typeof cc.engine !== 'undefined') {
+        apis.ccEngine_keys = Object.keys(cc.engine).slice(0, 30);
+      }
+      event.reply(null, apis);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
 
   // Scene info
   getSceneTree: function (event, params) {
@@ -194,6 +280,8 @@ module.exports = {
     try {
       var node = findNode(params);
       node.destroy();
+      // Force immediate cleanup so the destroyed node is removed before any save
+      cc.Object._deferredDestroy();
       event.reply(null, { success: true });
     } catch (e) {
       event.reply(e.message);
@@ -293,7 +381,29 @@ module.exports = {
       var node = findNode(params);
       var comp = node.getComponent(params.componentType);
       if (!comp) throw new Error('Component not found: ' + params.componentType);
-      comp[params.property] = params.value;
+
+      var prop = params.property;
+      var val = params.value;
+
+      // Asset-reference properties: must load the actual asset, NEVER assign raw UUID/object
+      if (ASSET_PROPS[prop]) {
+        // Allow clearing with null
+        if (val === null || val === undefined) {
+          comp[prop] = null;
+          event.reply(null, serializeComponent(comp));
+          return;
+        }
+        var uuid = extractUuid(val);
+        if (uuid) {
+          loadAndSetAssetProperty(comp, prop, uuid, event);
+          return; // async path
+        }
+        // Not a UUID — reject to prevent scene corruption
+        event.reply('Property "' + prop + '" requires a UUID string or {uuid: "..."} object, got: ' + typeof val);
+        return;
+      }
+
+      comp[prop] = val;
       event.reply(null, serializeComponent(comp));
     } catch (e) {
       event.reply(e.message);
