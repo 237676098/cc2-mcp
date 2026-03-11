@@ -8,6 +8,8 @@ import { registerProjectTools } from './project.js';
 import { registerEditorTools } from './editor.js';
 import { registerAnimationTools } from './animation.js';
 import { registerPrefabTools } from './prefab.js';
+import { registerSpineTools } from './spine.js';
+import { registerUITools } from './ui.js';
 
 export function registerTools(server: McpServer, bridge: BridgeClient) {
   registerSceneTools(server, bridge);
@@ -18,4 +20,6 @@ export function registerTools(server: McpServer, bridge: BridgeClient) {
   registerEditorTools(server, bridge);
   registerAnimationTools(server, bridge);
   registerPrefabTools(server, bridge);
+  registerSpineTools(server, bridge);
+  registerUITools(server, bridge);
 }

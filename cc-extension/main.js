@@ -747,6 +747,20 @@ function handleEditor(req, ws, method, params) {
             for (var i = 0; i < results.length; i++) {
               if (results[i].uuid === sceneInfo.uuid) { sceneAsset = results[i]; break; }
             }
+            // Fallback: runtime UUID often differs from assetdb UUID in CC2
+            // Try matching by scene name, or use the only scene if there's just one
+            if (!sceneAsset) {
+              if (results.length === 1) {
+                sceneAsset = results[0];
+              } else {
+                for (var j = 0; j < results.length; j++) {
+                  var baseName = results[j].url.replace(/^.*\//, '').replace(/\.fire$/, '');
+                  if (baseName === sceneInfo.name || baseName.toLowerCase() === sceneInfo.name.toLowerCase()) {
+                    sceneAsset = results[j]; break;
+                  }
+                }
+              }
+            }
             if (!sceneAsset || !sceneAsset.path) {
               sendError(_saveWs, _saveId, 'SAVE_ERROR', 'Scene file not found for uuid: ' + sceneInfo.uuid);
               return;

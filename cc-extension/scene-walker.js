@@ -103,7 +103,9 @@ function serializeComponent(comp) {
     setInsetBottom: 1, setInsetLeft: 1, setInsetRight: 1, setInsetTop: 1,
     getInsetBottom: 1, getInsetLeft: 1, getInsetRight: 1, getInsetTop: 1,
     // deprecated materials accessor
-    sharedMaterials: 1
+    sharedMaterials: 1,
+    // Widget deprecated property
+    isAlignOnce: 1
   };
   for (var key in allKeys) {
     if (key.startsWith('_') || skipSet[key]) continue;
@@ -112,6 +114,42 @@ function serializeComponent(comp) {
     } catch (e) { /* skip */ }
   }
   return result;
+}
+
+// ---- Spine helper ----
+
+function getSpineSkeleton(params) {
+  if (typeof sp === 'undefined') throw new Error('sp (spine) module not available');
+  var node = findNode(params);
+  var skeleton = node.getComponent(sp.Skeleton);
+  if (!skeleton) throw new Error('No sp.Skeleton component on node');
+  return skeleton;
+}
+
+// ---- UI helper ----
+
+function getOrAddComponent(node, typeName, addIfMissing) {
+  var comp = node.getComponent(typeName);
+  if (!comp) {
+    if (addIfMissing) {
+      comp = node.addComponent(typeName);
+    } else {
+      throw new Error('No ' + typeName + ' component. Set addIfMissing=true to auto-add.');
+    }
+  }
+  return comp;
+}
+
+// ---- Spine property setter (non-asset props) ----
+
+function _applySpineProps(skeleton, props) {
+  if (props.defaultSkin !== undefined) skeleton.defaultSkin = props.defaultSkin;
+  if (props.defaultAnimation !== undefined) skeleton.defaultAnimation = props.defaultAnimation;
+  if (props.animation !== undefined) skeleton.animation = props.animation;
+  if (props.loop !== undefined) skeleton.loop = props.loop;
+  if (props.premultipliedAlpha !== undefined) skeleton.premultipliedAlpha = props.premultipliedAlpha;
+  if (props.timeScale !== undefined) skeleton.timeScale = props.timeScale;
+  if (props.paused !== undefined) skeleton.paused = props.paused;
 }
 
 // ---- Asset-reference property helpers ----
@@ -348,6 +386,7 @@ module.exports = {
       else if (prop === 'anchor') { node.anchorX = val.x; node.anchorY = val.y; }
       else if (prop === 'size') { node.width = val.width; node.height = val.height; }
       else if (prop === 'color') { node.color = new cc.Color(val.r, val.g, val.b, val.a); }
+      else if (prop === 'rotation') { node.angle = -val; }
       else { node[prop] = val; }
       event.reply(null, serializeNode(node, 0, 0));
     } catch (e) {
@@ -633,6 +672,344 @@ module.exports = {
         result.rootNodeName = prefabInfo.root.name || null;
       }
       event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  // ---- Spine methods ----
+
+  getSpineInfo: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var skData = skeleton.skeletonData;
+      event.reply(null, {
+        hasSkeletonData: !!skData,
+        skeletonDataName: skData ? (skData.name || skData._name || null) : null,
+        skeletonDataUuid: skData ? (skData._uuid || null) : null,
+        defaultSkin: skeleton.defaultSkin || null,
+        defaultAnimation: skeleton.defaultAnimation || null,
+        animation: skeleton.animation || null,
+        loop: skeleton.loop,
+        premultipliedAlpha: skeleton.premultipliedAlpha,
+        timeScale: skeleton.timeScale,
+        paused: skeleton.paused,
+      });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setSpineProperty: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var props = params.properties || {};
+      var needAsync = false;
+
+      // Handle skeletonData (asset reference) separately
+      if (props.skeletonData !== undefined) {
+        var uuid = extractUuid(props.skeletonData);
+        if (uuid) {
+          needAsync = true;
+          cc.assetManager.loadAny({ uuid: uuid }, function (err, asset) {
+            if (err || !asset) {
+              event.reply('Failed to load skeletonData: ' + (err ? (err.message || err) : 'asset is null'));
+              return;
+            }
+            skeleton.skeletonData = asset;
+            // Set remaining props after async load
+            _applySpineProps(skeleton, props);
+            event.reply(null, { success: true });
+          });
+        } else if (props.skeletonData === null) {
+          skeleton.skeletonData = null;
+        }
+      }
+
+      if (!needAsync) {
+        _applySpineProps(skeleton, props);
+        event.reply(null, { success: true });
+      }
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  spineSetAnimation: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var track = params.track !== undefined ? params.track : 0;
+      var name = params.name;
+      var loop = params.loop !== undefined ? params.loop : false;
+      if (!name) throw new Error('Animation name is required');
+      skeleton.setAnimation(track, name, loop);
+      event.reply(null, { success: true, track: track, animation: name, loop: loop });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  spineAddAnimation: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var track = params.track !== undefined ? params.track : 0;
+      var name = params.name;
+      var loop = params.loop !== undefined ? params.loop : false;
+      var delay = params.delay !== undefined ? params.delay : 0;
+      if (!name) throw new Error('Animation name is required');
+      skeleton.addAnimation(track, name, loop, delay);
+      event.reply(null, { success: true, track: track, animation: name, loop: loop, delay: delay });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  spineSetSkin: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var skinName = params.skinName;
+      if (!skinName) throw new Error('skinName is required');
+      skeleton.setSkin(skinName);
+      event.reply(null, { success: true, skin: skinName });
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  getSpineBones: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var spSkeleton = skeleton._skeleton;
+      if (!spSkeleton) throw new Error('Spine skeleton not initialized (no skeletonData?)');
+      var bones = spSkeleton.bones || [];
+      var result = bones.map(function (bone) {
+        return {
+          name: bone.data ? bone.data.name : (bone.name || null),
+          parent: bone.parent ? (bone.parent.data ? bone.parent.data.name : null) : null,
+          x: bone.x,
+          y: bone.y,
+          rotation: bone.rotation,
+          scaleX: bone.scaleX,
+          scaleY: bone.scaleY,
+        };
+      });
+      event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  getSpineSlots: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var spSkeleton = skeleton._skeleton;
+      if (!spSkeleton) throw new Error('Spine skeleton not initialized (no skeletonData?)');
+      var slots = spSkeleton.slots || [];
+      var result = slots.map(function (slot) {
+        return {
+          name: slot.data ? slot.data.name : (slot.name || null),
+          bone: slot.bone ? (slot.bone.data ? slot.bone.data.name : null) : null,
+          attachment: slot.attachment ? slot.attachment.name : null,
+        };
+      });
+      event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  getSpineAnimations: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var spSkeleton = skeleton._skeleton;
+      if (!spSkeleton || !spSkeleton.data) throw new Error('Spine skeleton not initialized (no skeletonData?)');
+      var animations = spSkeleton.data.animations || [];
+      var result = animations.map(function (anim) {
+        return { name: anim.name, duration: anim.duration };
+      });
+      event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  getSpineSkins: function (event, params) {
+    try {
+      var skeleton = getSpineSkeleton(params);
+      var spSkeleton = skeleton._skeleton;
+      if (!spSkeleton || !spSkeleton.data) throw new Error('Spine skeleton not initialized (no skeletonData?)');
+      var skins = spSkeleton.data.skins || [];
+      var result = skins.map(function (skin) {
+        return { name: skin.name };
+      });
+      event.reply(null, result);
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  // ---- UI component setup methods ----
+
+  setupButton: function (event, params) {
+    try {
+      var node = findNode(params);
+      var btn = getOrAddComponent(node, cc.Button, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.transition !== undefined) btn.transition = p.transition;
+      if (p.normalColor) btn.normalColor = new cc.Color(p.normalColor.r, p.normalColor.g, p.normalColor.b, p.normalColor.a !== undefined ? p.normalColor.a : 255);
+      if (p.pressedColor) btn.pressedColor = new cc.Color(p.pressedColor.r, p.pressedColor.g, p.pressedColor.b, p.pressedColor.a !== undefined ? p.pressedColor.a : 255);
+      if (p.hoverColor) btn.hoverColor = new cc.Color(p.hoverColor.r, p.hoverColor.g, p.hoverColor.b, p.hoverColor.a !== undefined ? p.hoverColor.a : 255);
+      if (p.disabledColor) btn.disabledColor = new cc.Color(p.disabledColor.r, p.disabledColor.g, p.disabledColor.b, p.disabledColor.a !== undefined ? p.disabledColor.a : 255);
+      if (p.duration !== undefined) btn.duration = p.duration;
+      if (p.zoomScale !== undefined) btn.zoomScale = p.zoomScale;
+      if (p.interactable !== undefined) btn.interactable = p.interactable;
+      event.reply(null, serializeComponent(btn));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupEditBox: function (event, params) {
+    try {
+      var node = findNode(params);
+      var eb = getOrAddComponent(node, cc.EditBox, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.string !== undefined) eb.string = p.string;
+      if (p.placeholder !== undefined) eb.placeholder = p.placeholder;
+      if (p.maxLength !== undefined) eb.maxLength = p.maxLength;
+      if (p.inputFlag !== undefined) eb.inputFlag = p.inputFlag;
+      if (p.inputMode !== undefined) eb.inputMode = p.inputMode;
+      if (p.fontSize !== undefined) eb.fontSize = p.fontSize;
+      if (p.fontColor !== undefined) eb.fontColor = new cc.Color(p.fontColor.r, p.fontColor.g, p.fontColor.b, p.fontColor.a !== undefined ? p.fontColor.a : 255);
+      if (p.returnType !== undefined) eb.returnType = p.returnType;
+      event.reply(null, serializeComponent(eb));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupScrollView: function (event, params) {
+    try {
+      var node = findNode(params);
+      var sv = getOrAddComponent(node, cc.ScrollView, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.horizontal !== undefined) sv.horizontal = p.horizontal;
+      if (p.vertical !== undefined) sv.vertical = p.vertical;
+      if (p.inertia !== undefined) sv.inertia = p.inertia;
+      if (p.elastic !== undefined) sv.elastic = p.elastic;
+      if (p.brake !== undefined) sv.brake = p.brake;
+      if (p.bounceDuration !== undefined) sv.bounceDuration = p.bounceDuration;
+      event.reply(null, serializeComponent(sv));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupLayout: function (event, params) {
+    try {
+      var node = findNode(params);
+      var layout = getOrAddComponent(node, cc.Layout, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.type !== undefined) layout.type = p.type;
+      if (p.resizeMode !== undefined) layout.resizeMode = p.resizeMode;
+      if (p.spacingX !== undefined) layout.spacingX = p.spacingX;
+      if (p.spacingY !== undefined) layout.spacingY = p.spacingY;
+      if (p.paddingLeft !== undefined) layout.paddingLeft = p.paddingLeft;
+      if (p.paddingRight !== undefined) layout.paddingRight = p.paddingRight;
+      if (p.paddingTop !== undefined) layout.paddingTop = p.paddingTop;
+      if (p.paddingBottom !== undefined) layout.paddingBottom = p.paddingBottom;
+      if (p.cellSize !== undefined && p.cellSize) layout.cellSize = new cc.Size(p.cellSize.width, p.cellSize.height);
+      if (p.startAxis !== undefined) layout.startAxis = p.startAxis;
+      if (p.verticalDirection !== undefined) layout.verticalDirection = p.verticalDirection;
+      if (p.horizontalDirection !== undefined) layout.horizontalDirection = p.horizontalDirection;
+      if (p.affectedByScale !== undefined) layout.affectedByScale = p.affectedByScale;
+      if (typeof layout.updateLayout === 'function') layout.updateLayout();
+      event.reply(null, serializeComponent(layout));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupToggle: function (event, params) {
+    try {
+      var node = findNode(params);
+      var toggle = getOrAddComponent(node, cc.Toggle, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.isChecked !== undefined) toggle.isChecked = p.isChecked;
+      if (p.interactable !== undefined) toggle.interactable = p.interactable;
+      event.reply(null, serializeComponent(toggle));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupSlider: function (event, params) {
+    try {
+      var node = findNode(params);
+      var slider = getOrAddComponent(node, cc.Slider, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.direction !== undefined) slider.direction = p.direction;
+      if (p.progress !== undefined) slider.progress = p.progress;
+      event.reply(null, serializeComponent(slider));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupProgressBar: function (event, params) {
+    try {
+      var node = findNode(params);
+      var bar = getOrAddComponent(node, cc.ProgressBar, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.mode !== undefined) bar.mode = p.mode;
+      if (p.progress !== undefined) bar.progress = p.progress;
+      if (p.totalLength !== undefined) bar.totalLength = p.totalLength;
+      if (p.reverse !== undefined) bar.reverse = p.reverse;
+      event.reply(null, serializeComponent(bar));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupRichText: function (event, params) {
+    try {
+      var node = findNode(params);
+      var rt = getOrAddComponent(node, cc.RichText, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.string !== undefined) rt.string = p.string;
+      if (p.fontSize !== undefined) rt.fontSize = p.fontSize;
+      if (p.maxWidth !== undefined) rt.maxWidth = p.maxWidth;
+      if (p.lineHeight !== undefined) rt.lineHeight = p.lineHeight;
+      if (p.horizontalAlign !== undefined) rt.horizontalAlign = p.horizontalAlign;
+      if (p.handleTouchEvent !== undefined) rt.handleTouchEvent = p.handleTouchEvent;
+      event.reply(null, serializeComponent(rt));
+    } catch (e) {
+      event.reply(e.message);
+    }
+  },
+
+  setupWidget: function (event, params) {
+    try {
+      var node = findNode(params);
+      var widget = getOrAddComponent(node, cc.Widget, params.addIfMissing);
+      var p = params.properties || {};
+      if (p.isAlignTop !== undefined) widget.isAlignTop = p.isAlignTop;
+      if (p.isAlignBottom !== undefined) widget.isAlignBottom = p.isAlignBottom;
+      if (p.isAlignLeft !== undefined) widget.isAlignLeft = p.isAlignLeft;
+      if (p.isAlignRight !== undefined) widget.isAlignRight = p.isAlignRight;
+      if (p.isAlignHorizontalCenter !== undefined) widget.isAlignHorizontalCenter = p.isAlignHorizontalCenter;
+      if (p.isAlignVerticalCenter !== undefined) widget.isAlignVerticalCenter = p.isAlignVerticalCenter;
+      if (p.top !== undefined) widget.top = p.top;
+      if (p.bottom !== undefined) widget.bottom = p.bottom;
+      if (p.left !== undefined) widget.left = p.left;
+      if (p.right !== undefined) widget.right = p.right;
+      if (p.horizontalCenter !== undefined) widget.horizontalCenter = p.horizontalCenter;
+      if (p.verticalCenter !== undefined) widget.verticalCenter = p.verticalCenter;
+      // isAlignOnce is deprecated — convert to alignMode
+      if (p.isAlignOnce !== undefined) widget.alignMode = p.isAlignOnce ? cc.Widget.AlignMode.ONCE : cc.Widget.AlignMode.ALWAYS;
+      if (p.alignMode !== undefined) widget.alignMode = p.alignMode;
+      widget.updateAlignment();
+      event.reply(null, serializeComponent(widget));
     } catch (e) {
       event.reply(e.message);
     }
