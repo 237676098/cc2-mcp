@@ -4,7 +4,7 @@ MCP Server for Cocos Creator 2.4.3+ editor — let AI assistants control scenes,
 
 ## Features
 
-- **58 tools** covering scene, node, component, asset, animation, prefab, Spine, and UI operations
+- **60 tools** covering scene, node, component, asset, animation, prefab, Spine, UI, and code generation
 - **5 resources** for reading scene tree, project info, scene list and script list
 - Works with any MCP-compatible client (Claude Desktop, Claude Code, etc.)
 
@@ -104,6 +104,7 @@ The MCP Server communicates with the Cocos Creator editor extension via WebSocke
 | Prefab | 5 | list, read, instantiate, create prefabs |
 | Spine | 9 | skeleton info, bones, slots, skins, animations |
 | UI | 9 | button, editbox, scrollview, layout, widget, etc. |
+| Create | 2 | create TypeScript components, create scenes |
 
 ## License
 
