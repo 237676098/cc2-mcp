@@ -21,12 +21,21 @@ args:
 
 ### 1. 启动编辑器
 
-使用命令启动 Cocos Creator：
+编辑器安装路径：`D:\SoftData\Cocos\Editors\Creator\{版本号}\CocosCreator.exe`
+测试项目使用 2.4.3 版本。
+
+**重要：启动前必须先关闭已有的编辑器进程，同一项目不能被多个编辑器实例打开：**
 ```bash
-start "" "C:\CocosCreator\CocosCreator.exe" "C:\Users\zyb\Desktop\TestMcp"
+taskkill //F //IM CocosCreator.exe 2>/dev/null
+sleep 2
 ```
 
-等待 10 秒让编辑器完全启动。
+使用命令启动 Cocos Creator：
+```bash
+start "" "D:\SoftData\Cocos\Editors\Creator\2.4.3\CocosCreator.exe" --path "C:\Users\zyb\Desktop\TestMcp"
+```
+
+等待 30 秒让编辑器完全启动并加载场景。
 
 ### 2. 确定测试范围
 
@@ -88,7 +97,7 @@ start "" "C:\CocosCreator\CocosCreator.exe" "C:\Users\zyb\Desktop\TestMcp"
 
 使用命令关闭：
 ```bash
-taskkill /F /IM CocosCreator.exe
+taskkill //F //IM CocosCreator.exe
 ```
 
 ## 测试策略

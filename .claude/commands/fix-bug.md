@@ -57,11 +57,15 @@ npm run build
 启动编辑器并重新测试：
 
 ```bash
-# 启动编辑器
-start "" "C:\CocosCreator\CocosCreator.exe" "C:\Users\zyb\Desktop\TestMcp"
+# 先关闭已有编辑器（同一项目不能被多个实例打开）
+taskkill //F //IM CocosCreator.exe 2>/dev/null
+sleep 2
+
+# 启动编辑器（2.4.3 版本）
+start "" "D:\SoftData\Cocos\Editors\Creator\2.4.3\CocosCreator.exe" --path "C:\Users\zyb\Desktop\TestMcp"
 
 # 等待启动
-sleep 10
+sleep 30
 
 # 执行相同的测试用例
 # 使用 MCP 工具调用
@@ -70,7 +74,7 @@ sleep 10
 cat "C:\Users\zyb\.CocosCreator\logs\native.log" | grep -i error
 
 # 关闭编辑器
-taskkill /F /IM CocosCreator.exe
+taskkill //F //IM CocosCreator.exe
 ```
 
 ### 7. 更新 Bug 状态

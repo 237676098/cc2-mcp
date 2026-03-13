@@ -8,7 +8,35 @@ var serializer = require('./utils/serializer');
 var PORT = 9531;
 var wss = null;
 var client = null;
-var pendingSceneOpen = null; // { ws, id } — waiting for scene:ready after openScene
+
+// Poll for scene change completion (more reliable than scene:ready IPC)
+function pollSceneReady(ws, reqId, targetUuid) {
+  var attempts = 0;
+  var maxAttempts = 30; // 30 * 500ms = 15s max wait
+  var timer = setInterval(function () {
+    attempts++;
+    Editor.Scene.callSceneScript('cc2-mcp-bridge', 'getCurrentSceneInfo', null, function (err, info) {
+      if (!err && info && info.uuid) {
+        // If we know the target UUID, check for exact match
+        if (targetUuid && info.uuid === targetUuid) {
+          clearInterval(timer);
+          sendResponse(ws, reqId, { success: true });
+          return;
+        }
+        // If no target UUID, just check if scene changed (uuid differs from when we started)
+        if (!targetUuid && attempts >= 2) {
+          clearInterval(timer);
+          sendResponse(ws, reqId, { success: true });
+          return;
+        }
+      }
+      if (attempts >= maxAttempts) {
+        clearInterval(timer);
+        sendError(ws, reqId, 'TIMEOUT', 'Scene open timed out after 15s');
+      }
+    });
+  }, 500);
+}
 
 // ---- WebSocket Server ----
 
@@ -693,25 +721,23 @@ function handleEditor(req, ws, method, params) {
 
     case 'openScene':
       if (params.url) {
-        // First check if the same scene is already open via scene script
-        Editor.Scene.callSceneScript('cc2-mcp-bridge', 'getCurrentSceneInfo', null, function (err, info) {
-          if (!err && info && info.uuid) {
-            // Check if requested scene matches the currently loaded scene
-            Editor.assetdb.queryAssets(params.url, null, function (err2, results) {
-              if (!err2 && results && results.length > 0 && results[0].uuid === info.uuid) {
-                // Same scene already open — respond immediately
-                sendResponse(ws, req.id, { success: true, alreadyOpen: true });
-                return;
-              }
-              // Different scene — send open and wait for scene:ready
-              pendingSceneOpen = { ws: ws, id: req.id };
-              Editor.Ipc.sendToMain('scene:open-by-url', params.url);
-            });
-          } else {
-            // Can't determine current scene — just send open and wait
-            pendingSceneOpen = { ws: ws, id: req.id };
-            Editor.Ipc.sendToMain('scene:open-by-url', params.url);
+        // Resolve URL to UUID first, then open by UUID
+        Editor.assetdb.queryAssets(params.url, null, function (err2, results) {
+          if (err2 || !results || results.length === 0) {
+            sendError(ws, req.id, 'EDITOR_ERROR', 'Scene not found: ' + params.url);
+            return;
           }
+          var targetUuid = results[0].uuid;
+          // Check if the same scene is already open
+          Editor.Scene.callSceneScript('cc2-mcp-bridge', 'getCurrentSceneInfo', null, function (err, info) {
+            if (!err && info && info.uuid === targetUuid) {
+              sendResponse(ws, req.id, { success: true, alreadyOpen: true });
+              return;
+            }
+            // Open scene by UUID and poll for completion
+            Editor.Ipc.sendToAll('scene:open-by-uuid', targetUuid);
+            pollSceneReady(ws, req.id, targetUuid);
+          });
         });
       } else {
         sendError(ws, req.id, 'EDITOR_ERROR', 'url required');
@@ -800,13 +826,6 @@ module.exports = {
     'stop-server': function () { stopServer(); },
     'scene:ready': function () {
       Editor.log('[cc2-mcp-bridge] Scene ready');
-      // Resolve pending openScene request
-      if (pendingSceneOpen) {
-        try {
-          sendResponse(pendingSceneOpen.ws, pendingSceneOpen.id, { success: true });
-        } catch (e) { /* ws may be closed */ }
-        pendingSceneOpen = null;
-      }
     },
   },
 };
